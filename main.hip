@@ -1,6 +1,10 @@
 #include <cstdio>
 #include <hip/hip_runtime.h>
 #include <iostream>
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb_image_write.h"
 
 __global__ void HelloKernel() {
   printf("Hello from thread %d!\n", threadIdx.x);
@@ -57,13 +61,19 @@ int main() {
 
     unsigned char output_image[25];
 
-    const float mask[] = {
-        0.5, 0.5, 0.5,
-        0.5, 0.5, 0.5,
-        0.5, 0.5, 0.5,
+    const float box_blur[] = {
+        1.0f/9, 1.0f/9, 1.0f/9,
+        1.0f/9, 1.0f/9, 1.0f/9,
+        1.0f/9, 1.0f/9, 1.0f/9,
     };
 
-    ImageConvolutionCPU(image, output_image, 5, 5, 1, mask, 3);
+    const float sharpen[] = {
+        0, -1, 0,
+        -1, 5, -1,
+        0, -1, 0,
+    };
+
+    ImageConvolutionCPU(image, output_image, 5, 5, 1, box_blur, 3);
     
     for(int y = 0; y < 5; y++) {
         for (int x = 0; x < 5; x++) {
@@ -71,6 +81,22 @@ int main() {
         }
         printf("\n");
     }
+
+    int width, height, channels;
+    unsigned char* img_data = stbi_load("input/sample.jpg", &width, &height, &channels, 3);
+    if (!img_data) return -1;
+
+    unsigned char* output_data = (unsigned char*)malloc(width * height * 3);
+
+    printf("Image loaded: %dx%d, channels: %d\n", width, height, channels);
+    ImageConvolutionCPU(img_data, output_data, width, height, 3, sharpen, 3);
+
+    printf("Saving output image...\n");
+
+    stbi_write_jpg("output/output_cpu.jpg", width, height, 3, output_data, 90);
+
+    stbi_image_free(img_data);
+    free(output_data);
 
     return 0;
 }
