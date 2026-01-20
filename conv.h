@@ -18,7 +18,7 @@ void ImageConvolutionCPU(const unsigned char *input,
                          unsigned char *output_image, int width, int height,
                          int channels, const float *mask, int mask_width);
 
-#define MAX_MASK_SIZE 25
+#define MAX_MASK_SIZE 81
 
 extern "C" void setConvolutionKernel(float *h_Kernel, int mask_width);
 

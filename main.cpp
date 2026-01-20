@@ -20,7 +20,8 @@ int main() {
     std::vector<TestConfig> filters = {
         {SHARPEN, "Sharpen"},
         {EDGE_DETECT, "EdgeDetect"},
-        {GAUSSIAN_BLUR_5x5, "Gaussian"}
+        {GAUSSIAN_BLUR_5x5, "Gaussian5x5"},
+        {GAUSSIAN_BLUR_9x9, "Gaussian9x9"}
     };
 
     std::ofstream csv("output/performance_results.csv");
