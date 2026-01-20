@@ -237,7 +237,75 @@ __global__ void ImageConvolutionGPUConstTiled(
     if (x < width && y < height) {
         output_image[y * width + x] = (unsigned char)sum;
     }
+}
 
+__global__ void ImageConvolutionGPUConstTiledInterleaved(
+    const unsigned char *input,
+    unsigned char *output_image, 
+    int width, int height,
+    int channels,
+    int mask_width
+) {
+    
+    extern __shared__ unsigned char shared_mem[];
+    int shared_mem_width = TILE_WIDTH + (mask_width - 1);
+    int shared_mem_height = TILE_WIDTH + (mask_width - 1);
+    int thread_linear_index = threadIdx.y * blockDim.x + threadIdx.x;
+
+    int shared_mem_total = shared_mem_width * shared_mem_height;
+    int threads_per_block = blockDim.x * blockDim.y;
+
+    for (int i = thread_linear_index; i < shared_mem_total; i += threads_per_block) {
+        int local_x = i % shared_mem_width;
+        int local_y = i / shared_mem_width;
+        
+        int global_x = blockIdx.x * TILE_WIDTH + local_x - (mask_width / 2);
+        int global_y = blockIdx.y * TILE_WIDTH + local_y - (mask_width / 2);
+        
+        if (global_x >= 0 && global_x < width && global_y >= 0 && global_y < height)
+            for(int c = 0; c < channels; c++) {
+                shared_mem[i * channels + c] = input[(global_y * width + global_x) * channels + c];
+            }
+        else
+            for(int c = 0; c < channels; c++) {
+                shared_mem[i * channels + c] = 0;
+            }
+    }
+
+    __syncthreads();
+
+    int offset = mask_width / 2;
+    float sum = 0.0;
+
+    int shared_x = threadIdx.x + offset;
+    int shared_y = threadIdx.y + offset;
+
+    int x = blockIdx.x * TILE_WIDTH + threadIdx.x;
+    int y = blockIdx.y * TILE_WIDTH + threadIdx.y;
+
+    for (int c = 0; c < channels; c++) {
+        sum = 0.0;
+        // mask columns
+        for (int dy = -offset; dy <= offset; dy++) {
+            // mask rows
+            int pixel_y = shared_y + dy;
+            if (pixel_y < 0 || pixel_y >= shared_mem_height) continue;
+
+            for (int dx = -offset; dx <= offset; dx++) {
+                int pixel_x = shared_x + dx;
+                if (pixel_x < 0 || pixel_x >= shared_mem_width) continue;
+
+                sum += shared_mem[(pixel_y * shared_mem_width + pixel_x) * channels + c] * const_mask[(dy + offset) * mask_width + (dx+offset)];
+            }
+        }
+
+        if (sum > 255.0) sum = 255.0;
+        if (sum < 0.0)   sum = 0.0;
+
+        if (x < width && y < height) {
+            output_image[(y * width + x) * channels + c] = (unsigned char)sum;
+        }
+    }
 }
 
 // utility to reorder pixels from interleaved to planar
@@ -305,7 +373,7 @@ int main() {
 
     printf("Running on GPU...\n");
 
-    HIP_CHECK_RETURN(hipMemcpyToSymbol(const_mask, box_blur, 3 * 3 * sizeof(float)));
+    HIP_CHECK_RETURN(hipMemcpyToSymbol(const_mask, sharpen, 3 * 3 * sizeof(float)));
 
     unsigned char* device_input;
     HIP_CHECK_RETURN(hipMalloc(&device_input, 5 * 5 * 3 * sizeof(unsigned char)));
@@ -318,7 +386,9 @@ int main() {
     dim3 blockSize(threadsPerBlock, threadsPerBlock);
     dim3 gridSize((5 + blockSize.x - 1) / blockSize.x, (5 + blockSize.y - 1) / blockSize.y);
     
-    ImageConvolutionGPUConst<<<gridSize, blockSize>>>(device_input, device_output, 5, 5, 3, 3);
+    int shmem_size = (TILE_WIDTH + 3 - 1) * (TILE_WIDTH + 3 - 1) * sizeof(unsigned char) * 3;
+
+    ImageConvolutionGPUConstTiledInterleaved<<<gridSize, blockSize, shmem_size>>>(device_input, device_output, 5, 5, 3, 3);
 
     HIP_CHECK_RETURN(hipDeviceSynchronize());
 
@@ -370,21 +440,38 @@ int main() {
         printf("\n");
     }
 
-    // int width, height, channels;
-    // unsigned char* img_data = stbi_load("input/sample.jpg", &width, &height, &channels, 3);
-    // if (!img_data) return -1;
+    int width, height, channels;
+    unsigned char* img_data = stbi_load("input/sample.jpg", &width, &height, &channels, 3);
+    if (!img_data) return -1;
 
-    // unsigned char* output_data = (unsigned char*)malloc(width * height * 3);
+    unsigned char* output_real_image = (unsigned char*)malloc(width * height * 3);
 
-    // printf("Image loaded: %dx%d, channels: %d\n", width, height, channels);
-    // ImageConvolutionCPU(img_data, output_data, width, height, 3, sharpen, 3);
+    printf("Image loaded: %dx%d, channels: %d\n", width, height, channels);
+    
+    ImageConvolutionCPU(img_data, output_real_image, width, height, 3, sharpen, 3);
+    printf("Saving output image...\n");
 
-    // printf("Saving output image...\n");
+    stbi_write_jpg("output/output_cpu.jpg", width, height, 3, output_real_image, 90);
 
-    // stbi_write_jpg("output/output_cpu.jpg", width, height, 3, output_data, 90);
+    HIP_CHECK_RETURN(hipFree(device_input));
+    HIP_CHECK_RETURN(hipFree(device_output));
+    HIP_CHECK_RETURN(hipMalloc(&device_input, width * height * 3 * sizeof(unsigned char)));
+    HIP_CHECK_RETURN(hipMalloc(&device_output, width * height * 3 * sizeof(unsigned char)));
 
-    // stbi_image_free(img_data);
-    // free(output_data);
+    HIP_CHECK_RETURN(hipMemcpy(device_input, img_data, width * height * 3 * sizeof(unsigned char), hipMemcpyHostToDevice));
+    
+    dim3 blockSizeImage(threadsPerBlock, threadsPerBlock);
+    dim3 gridSizeImage((width + blockSizeImage.x - 1) / blockSizeImage.x, (height + blockSizeImage.y - 1) / blockSizeImage.y);
+    
+    shared_mem_size = (TILE_WIDTH + 3 - 1) * (TILE_WIDTH + 3 - 1) * sizeof(unsigned char) * 3;
 
+    ImageConvolutionGPUConstTiledInterleaved<<<gridSizeImage, blockSizeImage, shared_mem_size>>>(device_input, device_output, width, height, 3, 3);
+    HIP_CHECK_RETURN(hipDeviceSynchronize());
+    HIP_CHECK_RETURN(hipMemcpy(output_real_image, device_output, width * height * 3 * sizeof(unsigned char), hipMemcpyDeviceToHost));
+
+    stbi_write_jpg("output/output_gpu.jpg", width, height, 3, output_real_image, 90);
+
+    stbi_image_free(img_data);
+    free(output_real_image);
     return 0;
 }
