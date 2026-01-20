@@ -24,8 +24,10 @@ private:
     }
 
 public:
-    Image(const std::string& filename) : w(0), h(0), c(3), h_data(nullptr), d_data(nullptr), device_synced(false) {
-        h_data = stbi_load(filename.c_str(), &w, &h, &c, 3);
+    Image(const std::string& filename, int channels = 3) : w(0), h(0), c(channels), h_data(nullptr), d_data(nullptr), device_synced(false) {
+        h_data = stbi_load(filename.c_str(), &w, &h, &c, channels);
+        c = channels;
+        std::cout << "Loaded image: " << filename << " (" << w << "x" << h << "), Channels: " << c << std::endl;
         if (!h_data) {
             std::cerr << "Errore: Impossibile caricare " << filename << std::endl;
         }
