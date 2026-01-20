@@ -1,72 +1,85 @@
 #include <iostream>
 #include <vector>
 #include <chrono>
-#include <hip/hip_runtime.h>
-
-#include <iostream>
-#include <string>
+#include <fstream>
+#include <filesystem>
 #include <hip/hip_runtime.h>
 
 #include "conv.h"
 #include "Image.h"
 #include "masks.h"
 
-int main(int argc, char** argv) {
-    if (argc < 2) {
-        std::cout << "Utilizzo: " << argv[0] << " <percorso_immagine>" << std::endl;
-        return -1;
+namespace fs = std::filesystem;
+
+struct TestConfig {
+    MaskType type;
+    std::string name;
+};
+
+int main() {
+    std::vector<TestConfig> filters = {
+        {SHARPEN, "Sharpen"},
+        {EDGE_DETECT, "EdgeDetect"},
+        {GAUSSIAN_BLUR_5x5, "Gaussian"}
+    };
+
+    std::ofstream csv("output/performance_results.csv");
+    csv << "Resolution,Filter,CPUTime,GPUTimeWithMem,GPUTimeNoMem\n";
+
+    std::string input_path = "input/";
+    std::string output_path = "output/";
+    fs::create_directories(output_path);
+
+    for (const auto& entry : fs::directory_iterator(input_path)) {
+        if (entry.path().extension() != ".jpg" && entry.path().extension() != ".png" && entry.path().extension() != ".bmp") continue;
+
+        std::cout << "Measuring: " << entry.path().filename() << std::endl;
+
+        for (const auto& filter : filters) {
+            Image img(entry.path().string());
+            int mask_width;
+            std::vector<float> mask = getMask(filter.type, mask_width);
+            setConvolutionKernel(mask.data(), mask_width);
+
+            /////////// CPU ///////////
+            Image out_cpu(img.width(), img.height(), img.channels());
+            auto s_cpu = std::chrono::high_resolution_clock::now();
+            ImageConvolutionCPU(img.host(), out_cpu.host(), img.width(), img.height(), img.channels(), mask.data(), mask_width);
+            auto e_cpu = std::chrono::high_resolution_clock::now();
+            double t_cpu = std::chrono::duration<double, std::milli>(e_cpu - s_cpu).count();
+            /////////// CPU ///////////
+
+            /////////// GPU with Memory ///////////
+            Image out_gpu(img.width(), img.height(), img.channels());
+            auto s_gpu_mem = std::chrono::high_resolution_clock::now();
+            
+            img.device(); // sync to device
+            ImageConvolutionGPUConstTiledInterleaved(img.device(), out_gpu.device(), img.width(), img.height(), img.channels(), mask_width);
+            HIP_CHECK_RETURN(hipDeviceSynchronize());
+            out_gpu.sync_host(); // invalidate host copy
+            out_gpu.host(); // sync_host is lazy
+            
+            auto e_gpu_mem = std::chrono::high_resolution_clock::now();
+            double t_gpu_mem = std::chrono::duration<double, std::milli>(e_gpu_mem - s_gpu_mem).count();
+
+            /////////// GPU No Memory (Kernel only) ///////////
+            auto s_gpu_nomem = std::chrono::high_resolution_clock::now();
+            ImageConvolutionGPUConstTiledInterleaved(img.device(), out_gpu.device(), img.width(), img.height(), img.channels(), mask_width);
+            HIP_CHECK_RETURN(hipDeviceSynchronize());
+            auto e_gpu_nomem = std::chrono::high_resolution_clock::now();
+            double t_gpu_nomem = std::chrono::duration<double, std::milli>(e_gpu_nomem - s_gpu_nomem).count();
+
+            std::string res = std::to_string(img.width()) + "x" + std::to_string(img.height());
+            csv << res << "," << filter.name << "," << t_cpu << "," << t_gpu_mem << "," << t_gpu_nomem << "\n";
+
+            std::string base_name = entry.path().stem().string() + "_" + filter.name;
+            out_cpu.savejpg(output_path + base_name + "_cpu.jpg");
+            out_gpu.savejpg(output_path + base_name + "_gpu.jpg");
+            
+            std::cout << "  - " << filter.name << " complete. Speedup (Kernel): " << (t_cpu / t_gpu_nomem) << "x" << std::endl;
+        }
     }
 
-    Image img(argv[1]);
-    if (img.host() == nullptr) {
-        return -1;
-    }
-
-    Image img_output_cpu(img.width(), img.height(), img.channels());
-    // doesn't preallocate host memory for output on GPU
-    Image img_output_gpu(img.width(), img.height(), img.channels(), false);
-
-    // get mask using predefined type
-    int mask_width;
-    std::vector<float> mask = getMask(GAUSSIAN_BLUR_5x5, mask_width);
-
-    // evauluate CPU
-    auto start_cpu = std::chrono::high_resolution_clock::now();
-    ImageConvolutionCPU(img.host(), img_output_cpu.host(), img.width(), img.height(), img.channels(), mask.data(), mask_width);
-    auto end_cpu = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double, std::milli> cpu_time = end_cpu - start_cpu;
-    
-    // put the mask in constant memory on the GPU
-    setConvolutionKernel(mask.data(), mask_width);
-
-    // allocate GPU memory and copy input image
-    img.device(); // Assicuriamoci che i dati siano sulla GPU
-    img_output_gpu.device(); // Allochiamo memoria sulla GPU per l'output
-
-    // evaluate GPU
-    auto start_gpu = std::chrono::high_resolution_clock::now();
-    
-    ImageConvolutionGPUConstTiledInterleaved(img.device(), img_output_gpu.device(), img.width(), img.height(), img.channels(), mask_width);
-    
-    HIP_CHECK_RETURN(hipDeviceSynchronize()); // Attendiamo la fine per una misura precisa
-    auto end_gpu = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double, std::milli> gpu_time = end_gpu - start_gpu;
-
-    // invalidate host copy and sync back
-    img_output_gpu.sync_host();
-
-    // quick & dirty performance analysis
-    double speedup = cpu_time.count() / gpu_time.count();
-    std::cout << "\n--- Performance Analysis ---" << std::endl;
-    std::cout << "Risoluzione: " << img.width() << "x" << img.height() << std::endl;
-    std::cout << "Tempo CPU:   " << cpu_time.count() << " ms" << std::endl;
-    std::cout << "Tempo GPU:   " << gpu_time.count() << " ms (Kernel Tiled)" << std::endl;
-    std::cout << "Speedup:     " << speedup << "x" << std::endl;
-    std::cout << "----------------------------\n" << std::endl;
-
-    // save output images
-    img_output_cpu.savejpg("output/output_cpu.jpg");
-    img_output_gpu.savejpg("output/output_gpu.jpg");
-
+    csv.close();
     return 0;
 }
