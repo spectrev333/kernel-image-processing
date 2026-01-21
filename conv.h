@@ -37,6 +37,7 @@ extern "C" void ImageConvolutionGPUConstTiled(const unsigned char *device_input,
 extern "C" void ImageConvolutionGPUConstTiledInterleaved(const unsigned char *device_input,
                                                unsigned char *device_output, int width,
                                                int height, int channels,
+                                               int desired_channels,
                                                int mask_width);
 
 #endif

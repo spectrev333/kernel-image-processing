@@ -37,7 +37,7 @@ int main() {
         std::cout << "Measuring: " << entry.path().filename() << std::endl;
 
         for (const auto& filter : filters) {
-            Image img(entry.path().string());
+            Image img(entry.path().string(), 4);
             int mask_width;
             std::vector<float> mask = getMask(filter.type, mask_width);
             setConvolutionKernel(mask.data(), mask_width);
@@ -65,7 +65,7 @@ int main() {
                 auto s_gpu_mem = std::chrono::high_resolution_clock::now();
                 
                 img.device(); // sync to device
-                ImageConvolutionGPUConstTiledInterleaved(img.device(), out_gpu.device(), img.width(), img.height(), img.channels(), mask_width);
+                ImageConvolutionGPUConstTiledInterleaved(img.device(), out_gpu.device(), img.width(), img.height(), img.channels(), 3, mask_width);
                 HIP_CHECK_RETURN(hipDeviceSynchronize());
                 out_gpu.sync_host(); // invalidate host copy
                 out_gpu.host(); // sync_host is lazy
@@ -78,7 +78,7 @@ int main() {
 
             /////////// GPU No Memory (Kernel only, memory already loaded) ///////////
             auto s_gpu_nomem = std::chrono::high_resolution_clock::now();
-            ImageConvolutionGPUConstTiledInterleaved(img.device(), out_gpu.device(), img.width(), img.height(), img.channels(), mask_width);
+            ImageConvolutionGPUConstTiledInterleaved(img.device(), out_gpu.device(), img.width(), img.height(), img.channels(), 3, mask_width);
             HIP_CHECK_RETURN(hipDeviceSynchronize());
             auto e_gpu_nomem = std::chrono::high_resolution_clock::now();
             double t_gpu_nomem = std::chrono::duration<double, std::milli>(e_gpu_nomem - s_gpu_nomem).count();

@@ -139,6 +139,7 @@ __global__ void ImageConvolutionGPUConstTiledInterleavedKernel(
     unsigned char *output_image, 
     int width, int height,
     int channels,
+    int desired_channels,
     int mask_width
 ) {
     
@@ -158,11 +159,11 @@ __global__ void ImageConvolutionGPUConstTiledInterleavedKernel(
         int global_y = blockIdx.y * TILE_WIDTH + local_y - (mask_width / 2);
         
         if (global_x >= 0 && global_x < width && global_y >= 0 && global_y < height)
-            for(int c = 0; c < channels; c++) {
+            for(int c = 0; c < desired_channels; c++) {
                 shared_mem[i * channels + c] = input[(global_y * width + global_x) * channels + c];
             }
         else
-            for(int c = 0; c < channels; c++) {
+            for(int c = 0; c < desired_channels; c++) {
                 shared_mem[i * channels + c] = 0;
             }
     }
@@ -178,7 +179,7 @@ __global__ void ImageConvolutionGPUConstTiledInterleavedKernel(
     int x = blockIdx.x * TILE_WIDTH + threadIdx.x;
     int y = blockIdx.y * TILE_WIDTH + threadIdx.y;
 
-    for (int c = 0; c < channels; c++) {
+    for (int c = 0; c < desired_channels; c++) {
         sum = 0.0;
         // mask columns
         for (int dy = -offset; dy <= offset; dy++) {
@@ -208,6 +209,7 @@ extern "C" void ImageConvolutionGPUConstTiledInterleaved(
     unsigned char *device_output, 
     int width, int height,
     int channels,
+    int desired_channels,
     int mask_width
 ) {
     dim3 dimBlock(TILE_WIDTH, TILE_WIDTH);
@@ -215,6 +217,6 @@ extern "C" void ImageConvolutionGPUConstTiledInterleaved(
     size_t shared_mem_size = (TILE_WIDTH + mask_width - 1) * (TILE_WIDTH + mask_width - 1) * channels * sizeof(unsigned char);
 
     ImageConvolutionGPUConstTiledInterleavedKernel<<<dimGrid, dimBlock, shared_mem_size>>>(
-        device_input, device_output, width, height, channels, mask_width
+        device_input, device_output, width, height, channels, desired_channels, mask_width
     );
 }
