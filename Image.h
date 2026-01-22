@@ -69,6 +69,7 @@ public:
 
     void sync_host() {
         device_synced = false;
+        this->host();
     }
 
     void freehost() {

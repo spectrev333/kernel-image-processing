@@ -45,9 +45,9 @@ int main() {
             Image out_cpu(img.width(), img.height(), img.channels());
             Image out_gpu(img.width(), img.height(), img.channels());
 
-            const int num_runs = 3;
+            const int num_runs = 5;
 
-            /////////// CPU (3 runs) ///////////
+            /////////// CPU ///////////
             double t_cpu = 0.0;
             for (int run = 0; run < num_runs; ++run) {
                 auto s_cpu = std::chrono::high_resolution_clock::now();
@@ -58,7 +58,7 @@ int main() {
             t_cpu /= num_runs;
             /////////// CPU ///////////
 
-            /////////// GPU with Memory (3 runs) ///////////
+            /////////// GPU with Memory ///////////
             double t_gpu_mem = 0.0;
             for (int run = 0; run < num_runs; ++run) {
                 img.freedevice(); // ensure memory is freed on GPU before measuring
@@ -68,7 +68,6 @@ int main() {
                 ImageConvolutionGPUConstTiledInterleaved(img.device(), out_gpu.device(), img.width(), img.height(), img.channels(), mask_width);
                 HIP_CHECK_RETURN(hipDeviceSynchronize());
                 out_gpu.sync_host(); // invalidate host copy
-                out_gpu.host(); // sync_host is lazy
                 
                 auto e_gpu_mem = std::chrono::high_resolution_clock::now();
                 t_gpu_mem += std::chrono::duration<double, std::milli>(e_gpu_mem - s_gpu_mem).count();
@@ -77,11 +76,15 @@ int main() {
             /////////// GPU with Memory ///////////
 
             /////////// GPU No Memory (Kernel only, memory already loaded) ///////////
-            auto s_gpu_nomem = std::chrono::high_resolution_clock::now();
-            ImageConvolutionGPUConstTiledInterleaved(img.device(), out_gpu.device(), img.width(), img.height(), img.channels(), mask_width);
-            HIP_CHECK_RETURN(hipDeviceSynchronize());
-            auto e_gpu_nomem = std::chrono::high_resolution_clock::now();
-            double t_gpu_nomem = std::chrono::duration<double, std::milli>(e_gpu_nomem - s_gpu_nomem).count();
+            double t_gpu_nomem = 0.0;
+            for (int run = 0; run < num_runs; ++run) {
+                auto s_gpu_nomem = std::chrono::high_resolution_clock::now();
+                ImageConvolutionGPUConstTiledInterleaved(img.device(), out_gpu.device(), img.width(), img.height(), img.channels(), mask_width);
+                HIP_CHECK_RETURN(hipDeviceSynchronize());
+                auto e_gpu_nomem = std::chrono::high_resolution_clock::now();
+                t_gpu_nomem += std::chrono::duration<double, std::milli>(e_gpu_nomem - s_gpu_nomem).count();
+            }
+            t_gpu_nomem /= num_runs;
             /////////// GPU No Memory ///////////
 
             std::string res = std::to_string(img.width()) + "x" + std::to_string(img.height());
