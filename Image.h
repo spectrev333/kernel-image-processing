@@ -40,6 +40,19 @@ public:
         }
     }
 
+    Image(const Image& other) {
+        w = other.w;
+        h = other.h;
+        c = other.c;
+        h_data = nullptr;
+        d_data = nullptr;
+        device_synced = false;
+        if (other.h_data) {
+            h_data = (unsigned char*)malloc(w * h * c);
+            memcpy(h_data, other.h_data, w * h * c);
+        }
+    }
+
     ~Image() {
         freehost();
         freedevice();
@@ -57,7 +70,7 @@ public:
     }
 
     unsigned char* device() {
-        if (!d_data) {
+        if (!d_data || !device_synced) {
             check_hip(hipMalloc(&d_data, size_bytes()));
             if (h_data) {
                 check_hip(hipMemcpy(d_data, h_data, size_bytes(), hipMemcpyHostToDevice));
@@ -65,6 +78,33 @@ public:
             device_synced = true;
         }
         return d_data;
+    }
+
+    void reorder_pixel_planar() {
+        this->host();
+        unsigned char* temp = (unsigned char*)malloc(size_bytes());
+        for (int i = 0; i < w * h; i++) {
+            for (int ch = 0; ch < c; ch++) {
+                temp[ch * w * h + i] = h_data[i * c + ch];
+            }
+        }
+        std::swap(h_data, temp);
+        free(temp);
+        device_synced = false;
+    }
+
+    void reorder_pixel_interleaved() {
+        this->host();
+        unsigned char* temp = (unsigned char*)malloc(size_bytes());
+        for (int i = 0; i < w * h; i++) {
+            for (int ch = 0; ch < c; ch++) {
+                temp[i * c + ch] = h_data[ch * w * h + i];
+            }
+        }
+        freedevice();
+        std::swap(h_data, temp);
+        free(temp);
+        device_synced = false;
     }
 
     void sync_host() {

@@ -30,3 +30,7 @@ include_directories("/opt/rocm/include")
 hip_add_executable(main main.cpp conv_cpu.cpp conv_gpu.hip)
 #target_include_directories(main PRIVATE /opt/rocm/include)
 target_link_libraries(main PRIVATE stb)
+
+hip_add_executable(test test.cpp conv_cpu.cpp conv_gpu.hip)
+#target_include_directories(main PRIVATE /opt/rocm/include)
+target_link_libraries(test PRIVATE stb)
